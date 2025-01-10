@@ -242,7 +242,9 @@ class PoseTimeseries:
         Returns:
             PIL.Image: Image of the plot       
         """
-        if data is None: return None
+        if data is None:
+            print("Data is None") 
+            return None
         fig, ax = plt.subplots(figsize=(14, 6))
         
         fourier = np.fft.fft(data)

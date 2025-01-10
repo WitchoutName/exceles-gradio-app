@@ -3,15 +3,21 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from comfyui_controlnet_aux.src.custom_controlnet_aux.dwpose import DwposeDetector
-
+import traceback
 from lib.BagData import BagData
 
 pose_detector = None
 
 
 def process_frame(data_path, frame_name, process_method, use_cache=True):
-    frame = BagData.load_frame(os.path.join(data_path, frame_name))
-    return process_method(frame, use_cache)
+    try:
+        frame = BagData.load_frame(os.path.join(data_path, frame_name))
+        retult = process_method(frame, use_cache)
+        return retult
+    except Exception as e:
+        traceback.print_exc()
+        raise e
+
 
 
 
@@ -48,16 +54,23 @@ class Pose3dDict:
 
         # Use ProcessPoolExecutor for CPU-bound tasks
         with ProcessPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(process_frame, data_path, frame_name, get__injected_pose_detector, use_cache): frame_name for frame_name in sorted(os.listdir(data_path))[2:]}
-            for future in tqdm(as_completed(futures), total=len(futures)):
+            futures = {executor.submit(process_frame, data_path, frame_name, cls.get, use_cache): frame_name for frame_name in sorted(os.listdir(data_path))[2:]}
+            error_occurred = False
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing frames"):
+                if error_occurred:
+                    break
                 try:
                     pose3d_array.append(future.result())
+                    
                 except Exception as e:
-                    print(f"Error processing frame {futures[future]}: {e}")
-        return pose3d_array
+                    error_occurred = True
+                    executor.shutdown(wait=False)
+                    traceback.print_exc()
+                    return f"Error processing frame {futures[future]}: {e}", None
+        return None, pose3d_array
 
     @classmethod
-    def get(cls, frame, pose_detector, use_cache=True):
+    def get(cls, frame, use_cache=True):
         if cls.FILE_NAME in os.listdir(frame["path"]) and use_cache:
             return cls.load(frame["path"])
         
@@ -72,9 +85,9 @@ class Pose3dDict:
         )
     
         person_pose = pose_dict.get("people")[0]
-        body_points = person_pose.get("pose_keypoints_2d")
-        handl_points = person_pose.get("hand_left_keypoints_2d")
-        handr_points = person_pose.get("hand_right_keypoints_2d")
+        body_points = person_pose.get("pose_keypoints_2d") or [0]*18*3
+        handl_points = person_pose.get("hand_left_keypoints_2d") or [0]*21*3
+        handr_points = person_pose.get("hand_right_keypoints_2d") or [0]*21*3
         pose3d_dict = {
             "body_keypoints_3d": cls.keypoints_to_3d(body_points, frame),
             "hand_left_keypoints_3d": cls.keypoints_to_3d(handl_points, frame),

@@ -1,7 +1,9 @@
-from lib.PoseTimeseries import PoseTimeseries
 import numpy as np
 import matplotlib.pyplot as plt
+from io import BytesIO
+from PIL import Image
 
+from lib.PoseTimeseries import PoseTimeseries
 
 
 class Vector2dTimeseries(PoseTimeseries):
@@ -64,19 +66,60 @@ class Vector2dTimeseries(PoseTimeseries):
         plt.show()
 
     @staticmethod
-    def plot_pivot(data):
+    def plot_pivot(data, rank="2D"):
         """
         Plots the array over time.
         Parameters:
         data (numpy.ndarray): Input array of shape (n).
         """
-        # Create a figure with 3 subplots
-        # Plot each coordinate
-        plt.figure(figsize=(10, 4))
-        plt.plot(data)
-        plt.title('Vector size Over Time')
-        plt.xlabel('Time')
-        plt.ylabel('Vector size')
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
+        if data is None:
+            return None
+
+        fig, ax = plt.subplots(figsize=(14, 10))
+        ax.plot(data, label=f'Vector {rank} Magnitude')
+        ax.set_title(f'Vector {rank} Magnitude Over Time')
+        ax.set_xlabel('Time')
+        ax.set_ylabel(f'Vector {rank} Magnitude')
+        ax.grid(True)
+
+        buf = BytesIO()
+        fig.savefig(buf, format='png')
+        buf.seek(0)
+        plt.close(fig)
+        return Image.open(buf)
+        
+    @staticmethod
+    def plot_pivot_fft(data, axis_label="2D", fps=60):
+        """
+        Plots the FFT of the array over time.
+        Parameters:
+        data (numpy.ndarray): Input array of shape (n).
+        """
+        if data is None:
+            return None
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        fourier = np.fft.fft(data)
+        # Get the number of samples
+        n = data.shape[0]
+        # Calculate frequency bins in Hz
+        freq = np.fft.fftfreq(n, d=1/fps)
+        # Only take the positive half of the frequencies and corresponding magnitudes
+        half_n = n // 2
+        freq = freq[:half_n]
+        magnitude = np.abs(fourier[:half_n])
+        # Plotting the magnitude of the Fourier Transform
+        ax.plot(freq, magnitude, label=f'{axis_label}', color="g")
+        ax.set_yscale('log')
+        ax.set_title(f'Fourier Transform of {axis_label}')
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Magnitude')
+        # axs[i].set_xlim(0, 10) # Limit x-axis to 10 kHz
+        ax.grid(True)
+
+
+        buf = BytesIO()
+        fig.savefig(buf, format='png')
+        buf.seek(0)
+        plt.close(fig)
+        return Image.open(buf)

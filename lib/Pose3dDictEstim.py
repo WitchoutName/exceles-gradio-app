@@ -21,6 +21,7 @@ class Pose3dDictEstim(Pose3dDict):
         """
         depth_array = np.array(depth_image)
         height, width = depth_array.shape
+        y, x = np.clip(int(y), 0, height-1), np.clip(int(y), 0, width-1)
     
         if depth_array[y, x] != 0:
             return depth_array[y, x], 0
@@ -48,7 +49,8 @@ class Pose3dDictEstim(Pose3dDict):
         
         for i in range(0, len(keypoints), 3):
             x, y, _ = keypoints[i:i+3]
-            depth = depth_frame[int(y), int(x)]
+            y_shape, x_shape = depth_frame.shape
+            depth = depth_frame[np.clip(int(y), 0, y_shape-1), np.clip(int(y), 0, x_shape-1)]
             depth, radius = cls.approximate_depth(depth_frame, int(x), int(y))
             keypoints_3d.append(x)
             keypoints_3d.append(y)

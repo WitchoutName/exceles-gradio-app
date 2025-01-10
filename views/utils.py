@@ -5,7 +5,7 @@ def format_video_info(farame_count=1, duration=1):
     return """#### Video Information
     - **Frame Count**: {}
     - **Duration**: {} seconds
-    - **FPS**: {}""".format(farame_count, duration, round(farame_count/duration, 2))
+    - **FPS**: {}""".format(farame_count, duration, round(farame_count/max(duration, 1), 2))
 
 
 def error_text(text):

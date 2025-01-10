@@ -45,7 +45,7 @@ class VisualizeView:
 
             with gr.Column():
                 # color video of the .bag
-                video = gr.Video(render=False)
+                video = gr.Video(render=True)
                 
                 def _on_bag_data_change__video(bag_data, progress=gr.Progress(track_tqdm=True)):
                     return bag_data.get_video()            
@@ -200,7 +200,7 @@ class VisualizeView:
 
                     def _on_is_filtered_change_factory(axis):
                         def _on_is_filtered_change(is_filtered, pivot, filter_fn=lambda x: x, filter_params=[]):
-                            if not filter_fn: return []
+                            if not filter_fn: return pivot[axis]
                             fn = lambda x: filter_fn(x, *filter_params)
                             return PoseTimeseries.filter_axis(pivot[axis], fn) if is_filtered else pivot[axis]
                         return _on_is_filtered_change

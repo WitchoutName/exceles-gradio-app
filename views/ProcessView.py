@@ -45,7 +45,7 @@ class ProcessView:
             try:
                 if file_name:
                     data_path = os.path.join(DATA_BASE_DIR, file_name)
-                    pose3d_array, error = Pose3dDictEstim.from_unpacked_bag(data_path, use_cache)
+                    error, pose3d_array = Pose3dDictEstim.from_unpacked_bag(data_path, use_cache)
 
                     if error:
                         return error_text(error), False
@@ -63,7 +63,7 @@ class ProcessView:
                 return "No data selected", False
             except Exception as e:
                 traceback.print_exc()
-                return error_text(str(e))
+                return error_text(str(e)), False
     
         self.file_selector = file_selector
         self.output = output
