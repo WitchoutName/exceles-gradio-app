@@ -1,7 +1,5 @@
 import numpy as np
 import gradio as gr
-from collections import deque
-from gradio.components.base import Component
 import os
 import json
 from enum import Enum
@@ -10,7 +8,6 @@ from lib.Filter import Filter
 from lib.PoseTimeseries import PoseTimeseries
 from lib.Vector2dTimeseries import Vector2dTimeseries
 from lib.Vector3dTimeseries import Vector3dTimeseries
-from lib.Session import Session
 
 
 class ProcessingViewModel:
@@ -25,66 +22,30 @@ class PivotAxisName(Enum):
     Vector2d = "XY 2D Vector magnitude"
     Vector3d = "XYZ 3D Vector magnitude"
 
-    
-    
-class ComponentStateProxy:
-    @staticmethod
-    def initialize_state(component: Component):
-        """
-        Initialize the state for a given component.
-        
-        Args:
-            component (Component): The component to initialize the state for.
-        
-        Returns:
-            gr.State: The initialized state.
-        """
-        state = gr.State(None)
-        # @component.change(inputs=[component], outputs=[state])
-        def _on_component_change(value):
-            return value
+from gradio.events import Dependency
 
-        gr.on(
-            triggers=[component.change], 
-            fn=_on_component_change, 
-            inputs=[component], outputs=[state]
-        )
-    
-        return state
-    
-    
-        
-    def transform_components(self):
-        """
-        Transform the components in the current instance by hooking up their states.
-        """
-        queue = deque()
-        
-        for key, value in self.__dict__.items():
-            if isinstance(value, Component):
-                setattr(self, key, ComponentStateProxy.initialize_state(value))
-            else:
-                queue.append(value)
-        
-        while queue:
-            obj = queue.popleft()
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    if isinstance(value, Component):
-                        obj[key] = ComponentStateProxy.initialize_state(value)
-                    else:
-                        queue.append(value)
-            elif isinstance(obj, (list, tuple, set)):
-                for i, value in enumerate(obj):
-                    if isinstance(value, Component):
-                        obj[i] = ComponentStateProxy.initialize_state(value)
-                    else:
-                        queue.append(value)
-            else:
-                raise ValueError(f"Unsupported type: {type(obj)}")
-                
+class SessionTag(gr.Label):
+    pass
+    from typing import Callable, Literal, Sequence, Any, TYPE_CHECKING
+    from gradio.blocks import Block
+    if TYPE_CHECKING:
+        from gradio.components import Timer
 
-class VizuViewComponentState(ComponentStateProxy):
+
+class Session:
+    def __init__(self, app, session_tag):
+        self.app = app
+        self.processing = ProcessingViewModel(app)
+        self.vizu = VizuViewModel(app)
+    
+    # @staticmethod
+    # def inject_tag():
+    #     tag = gr.Label(visible=False)
+    #     @tag.on
+
+
+
+class VizuViewElements:
     def __init__(self):
         self.filter_name = None
         self.pivot_selector = []
@@ -95,15 +56,14 @@ class VizuViewComponentState(ComponentStateProxy):
 class VizuViewModel:
     def __init__(self, app):
         self.app = app
-        self.comp_state = VizuViewComponentState()
-        self.session = Session(app)
+        self.elements = VizuViewElements()
         self.bag_data = gr.State(None)
         self.filter = gr.State(None)
         self.filter_params = gr.State([])
-        self.pivot = [gr.State(np.array([[], [], []])), gr.State(np.array([[], [], []]))]
-        self.x_axis = [gr.State(np.array([])), gr.State(np.array([]))]
-        self.y_axis = [gr.State(np.array([])), gr.State(np.array([]))]
-        self.z_axis = [gr.State(np.array([])), gr.State(np.array([]))]
+        self.pivot = [gr.State([[], [], []]), gr.State([[], [], []])]
+        self.x_axis = [gr.State([]), gr.State([])]
+        self.y_axis = [gr.State([]), gr.State([])]
+        self.z_axis = [gr.State([]), gr.State([])]
 
     def set_bag_data(self, data_path):
         return BagData(data_path)
@@ -122,51 +82,43 @@ class VizuViewModel:
         return _on_is_filtered_change
     
     def get_data_dict(self, pivot_axis_name: PivotAxisName):
-        get_value = self.session.get_value
         def axis_name_to_timeseries(i):
-            x_axis, y_axis, z_axis =  [np.array(get_value(x)) for x in (self.x_axis[i], self.y_axis[i], self.z_axis[i])]
-            if x_axis.size == y_axis.size == z_axis.size:
-                vector2d = Vector2dTimeseries.pose_to_vector_length(np.array([[x_axis, y_axis, np.zeros_like(x_axis)]]))[0]
-                vector3d = Vector3dTimeseries.pose_to_vector_length(np.array([[x_axis, y_axis, z_axis]]))[0]
-            else:
-                vector2d = vector3d = np.array([])
-                
             return {
-                PivotAxisName.X: x_axis,
-                PivotAxisName.Y: y_axis,
-                PivotAxisName.Z: z_axis,
-                PivotAxisName.Vector2d: vector2d,
-                PivotAxisName.Vector3d: vector3d
+                PivotAxisName.X: self.x_axis[i].value,
+                PivotAxisName.Y: self.y_axis[i].value,
+                PivotAxisName.Z: self.z_axis[i].value,
+                PivotAxisName.Vector2d: Vector2dTimeseries.pose_to_vector_length(np.array([[self.x_axis[i].value, self.y_axis[i].value, np.zeros_like(self.x_axis[i].value)]]))[0],
+                PivotAxisName.Vector3d: Vector3dTimeseries.pose_to_vector_length(np.array([[self.x_axis[i].value, self.y_axis[i].value, self.z_axis[i].value]]))[0]
             }[pivot_axis_name]
-            
-        def apply_fft(data: np.ndarray) -> np.ndarray:
+
+        def apply_fft(data):
             fourier = np.fft.fft(data)
             half_n = data.shape[0] // 2
             return np.abs(fourier[:half_n])
         
         def export_pivot_data(i):
-             data: np.ndarray = np.array(axis_name_to_timeseries(i))
+             data = axis_name_to_timeseries(i)
              return {
-                "filtered_axis": [get_value(axis) or False for axis in self.comp_state.use_filter[0]],
-                "start_frame": get_value(self.comp_state.min_max[0][0]),
-                "end_frame": get_value(self.comp_state.min_max[0][1]),
-                "pivot": get_value(self.comp_state.pivot_selector[0]),
-                "timeseries": data.tolist(),
-                "fft_magnitude": apply_fft(data).tolist() if data.size > 0 else []
+                "filtered_axis": [f.value for f in self.elements.use_filter[0]],
+                "start_frame": self.elements.min_max[0][0].value,
+                "end_frame": self.elements.min_max[0][1].value,
+                "pivot": self.elements.pivot_selector[0].value,
+                "timeseries": data,
+                "fft_magnitude": apply_fft(data) if data else None
             }
         
-        bag_data = get_value(self.bag_data)
         data = {
-            "bag_file": bag_data.bag_name if bag_data else None,
+            "bag_file": self.bag_data.value.bag_name if self.bag_data.value else None,
             "filter": {
-                "name": get_value(self.comp_state.filter_name),
-                "params": get_value(self.filter_params)
+                "name": self.elements.filter_name.value,
+                "params": self.filter_params.value
             },
             "pivot_axis_name": pivot_axis_name.value,
             "pivot_1": export_pivot_data(0),
             "pivot_2": export_pivot_data(1)
         }
         
+        print(data)
         return data
         
         # Example of the data
@@ -197,7 +149,7 @@ class VizuViewModel:
         
     def export_json(self, pivot_axis_name: PivotAxisName):
         data = self.get_data_dict(pivot_axis_name)
-        file_name = f"{data.get('bag_file')}_{pivot_axis_name.value}.json"
+        file_name = f"{self.bag_data.value.bag_name if self.bag_data.value else ''}_{pivot_axis_name.value}.json"
         file_path = os.path.join("/tmp", file_name)
 
         with open(file_path, "w") as f:

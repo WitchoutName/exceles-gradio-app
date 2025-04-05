@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "app.py",
+            "console": "integratedTerminal",
+            "python": "/mnt/200GB/Foltyn/exceles/exceles-gradio-app/venv/bin/python3.10"
+        }
+    ]
+}

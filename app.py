@@ -36,5 +36,7 @@ with gr.Blocks() as app:
         if complete_signal:
             return gr.update(choices=VisualizeView.get_file_selector_choices()), False
         return gr.update(), gr.update()
+    
+
             
 app.launch(share=True, allowed_paths=[DATA_BASE_DIR])

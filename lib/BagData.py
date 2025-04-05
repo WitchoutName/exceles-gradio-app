@@ -4,8 +4,8 @@ from PIL import Image
 import cv2
 import gradio as gr
 from tqdm import tqdm
-from lib.PoseTimeseries import PoseTimeseries
-import moviepy.video.io.ImageSequenceClip
+from lib.PoseTimeseries import PoseTimeseries, body_part_names
+from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 
 from config import DEBUG
 
@@ -16,12 +16,11 @@ class BagData:
         self.data_dir = data_dir
         self.bag_name = os.path.basename(data_dir).split(".")[0]
         self.video_path = os.path.join(data_dir, BagData.COMPUTED_DIR, "video.mp4")
-        self.frame_count = len(os.listdir(data_dir)) - 1
-        self.duration = self.frame_count / 60
         self.frames = []
         # Processing
         self.pose3d_array = []
         self.pose_timeseries = PoseTimeseries.load(self.data_dir)
+        self.duration = self.get_frame_count() / 60
 
     @staticmethod
     def load_frame(frame_path, **kwargs):
@@ -65,16 +64,42 @@ class BagData:
         print(res)
         return res
     
+    def get_frame_count(self):
+        if self.pose_timeseries is not None:
+            return self.pose_timeseries[list(self.pose_timeseries.keys())[0]].shape[2]
+        return len([f for f in os.listdir(self.data_dir) if f.startswith("frame_")])
+    
     def get_video(self, cache=True):
         if cache and os.path.exists(self.video_path):
             return self.video_path
     
-        first_frame = self.load_frame(os.path.join(self.data_dir, sorted(os.listdir(self.data_dir))[2]), color=True)["color"]    
+        def processed_frame(index):
+            frame_path = os.path.join(self.data_dir, f"frame_{str(index).zfill(5)}")
+            frame_image = self.load_frame(frame_path, color=True, depth=False, confidence=False)["color"]
+            
+            def get_pose_coords(pose):
+                return [pose[0][index], pose[1][index]]
+            
+            body = self.pose_timeseries["body"]
+            neck = body[body_part_names.index("Neck")]
+            eye_left = body[body_part_names.index("Left Eye")]
+            eye_right = body[body_part_names.index("Right Eye")]
+            coords = [get_pose_coords(eye_left), *[get_pose_coords(eye_right), get_pose_coords(neck)]*2]
+            face_center = tuple(map(int, np.mean(coords, axis=0)))
+            
+            # Draw circle on face center
+            radius = int(np.linalg.norm(np.array(coords[0]) - np.array(face_center)))
+            frame_image = cv2.circle(np.array(frame_image), face_center, int(radius * 1.2), (0, 0, 0), -1)
+            
+            return frame_image
 
-        image_files = [os.path.join(self.data_dir, frame, "image.png") for frame in sorted(os.listdir(self.data_dir))[1:]]
+        frame_files = sorted([f for f in os.listdir(self.data_dir) if f.startswith("frame_")])
+        images = [processed_frame(index) for index in tqdm(range(len(frame_files)-1), desc="Creating video")]
 
-        clip = moviepy.video.io.ImageSequenceClip.ImageSequenceClip(image_files, fps=60)
+        clip = ImageSequenceClip(images, fps=60)
         clip.write_videofile(self.video_path)
+        
+        return self.video_path
         
         # fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
         # video_writer = cv2.VideoWriter(self.video_path, fourcc, 60, first_frame.size)

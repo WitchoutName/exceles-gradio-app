@@ -7,18 +7,22 @@ from lib.BagData import BagData
 from lib.PoseTimeseries import PoseTimeseries
 from lib.Vector2dTimeseries import Vector2dTimeseries
 from lib.Vector3dTimeseries import Vector3dTimeseries
-from lib.PoseViewModel import VizuViewModel 
+from lib.PoseViewModel import VizuViewModel, PivotAxisName
 from lib.Filter import Filter
 from views.utils import format_video_info
 
 from config import DATA_BASE_DIR
 
+import gradio.events as Events
+
+
 class VisualizeView:
     @staticmethod
     def get_file_selector_choices():
         return ["Select"] + BagData.list_processed(DATA_BASE_DIR)
+    
 
-    def __init__(self, app):
+    def __init__(self, app: gr.Blocks):
         self.file_selector = None
         
         vm = VizuViewModel(app)
@@ -56,7 +60,7 @@ class VisualizeView:
                 @vm.bag_data.change(inputs=[vm.bag_data], outputs=[video_info])
                 def _on_bag_data_change__video_info(bag_data):
                     print("bag_data changed")
-                    return format_video_info(bag_data.frame_count, bag_data.duration)
+                    return format_video_info(bag_data.get_frame_count(), bag_data.duration)
 
 
 
@@ -106,11 +110,12 @@ class VisualizeView:
                 inputs=[filter_type, window_input, sigma_input, window_input_sva, polyorder_input], 
                 outputs=[vm.filter, vm.filter_params]
             )
-
+            
 
         with gr.Row():
             def part_config(pi):
                 with gr.Column():
+                    x_axis, y_axis, z_axis = vm.x_axis[pi], vm.y_axis[pi], vm.z_axis[pi]
                     gr.Markdown(f"## Body/Hand Part {pi+1}")
                     part_selector = gr.Dropdown(
                         ["Select"] + PoseTimeseries.all_parts_list,
@@ -118,48 +123,53 @@ class VisualizeView:
                         label="Select Body/Hand Part"
                     )
                     
-                    @part_selector.change(inputs=[vm.bag_data, part_selector], outputs=[vm.pivot[pi], vm.x_axis[pi], vm.y_axis[pi], vm.z_axis[pi]])
                     def _on_part_change(bag_data, part_name):
                         print(part_name)
                         if part_name == "Select":
-                            return [np.array([[], [], []]), *[np.array()]*3]
+                            return [np.array([[], [], []]), *[np.array([])]*3]
                         pivot = vm.set_pivot(bag_data, part_name)
                         return [pivot, pivot[0], pivot[1], pivot[2]]
                     
-                    def _on_bag_data_change_part_selector(bag_data, progress=gr.Progress(track_tqdm=True)):
-                        if bag_data:
-                            bag_data.process_frames()
-                        return gr.update(visible=bag_data)
-                    # vm.bag_data.change(_on_bag_data_change_part_selector, vm.bag_data, part_selector)
+                    gr.on(
+                        triggers=[part_selector.change, vm.bag_data.change], 
+                        fn=_on_part_change,
+                        inputs=[vm.bag_data, part_selector],
+                        outputs=[vm.pivot[pi], x_axis, y_axis, z_axis]
+                    )
                     
                     
-                    # for [vm_axis, axis_name] in [[vm.x_axis[pi], "X"], [vm.y_axis[pi], "Y"], [vm.z_axis[pi], "Z"]]:
-                    #     gr.Markdown(f"### {axis_name} Axis")
-                    #     is_filtered = gr.Checkbox(label=f"Use Filter ({axis_name})")
-                    #     plot = gr.Image()
-                    #     gr.Markdown(f"###### FFT")
-                    #     fft_plot = gr.Image()
-                    #     def _on_axis_change(axis):
-                    #         print(f"Axis Name: {axis_name}, Axis Content: {axis}, Type: {type(axis)}, Shape: {getattr(axis, 'shape', 'No Shape')}, Length: {len(axis) if hasattr(axis, '__len__') else 'No Length'}")
-                    #         return [
-                    #             PoseTimeseries.plot_pivot_axes(axis, axis_name),
-                    #             PoseTimeseries.plot_pivot_axes_fft(axis, axis_name) if len(axis.shape) == 1 and axis.shape[0] > 0 else None
-                    #         ]
-                    #     vm_axis.change(_on_axis_change, inputs=[vm_axis], outputs=[plot, fft_plot])
-                        
-                    #     def _on_is_filtered_change(x_is_filtered, pivot, filter_fn=lambda x: x, filter_params=[]):
-                    #         if not filter_fn: return []
-                    #         fn = lambda x: filter_fn(x, *filter_params)
-                    #         return PoseTimeseries.filter_axis(pivot, fn)
-                    #     gr.on(
-                    #         triggers=[is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change], 
-                    #         fn=_on_is_filtered_change,
-                    #         inputs=[is_filtered, vm.pivot[pi], vm.filter, vm.filter_params],
-                    #         outputs=[vm_axis]
-                    #     )
+                    gr.Markdown("### Limit the interval of frames to process")
+                    with gr.Row():
+                        with gr.Column(min_width=540):
+                            start_frame = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Start Frame")
+                            end_frame = gr.Slider(minimum=0, maximum=100, step=1, value=100, label="End Frame")
+                            
+                            bag_data = vm.bag_data
+                            @bag_data.change(inputs=[bag_data], outputs=[start_frame, end_frame])
+                            def _on_frame_interval_change(bag_data):
+                                if bag_data:
+                                    length = bag_data.get_frame_count()
+                                    return [gr.update(maximum=length, value=0), gr.update(maximum=length, value=length)]
+                                return [gr.update(), gr.update()]
+                            
+                        full_interval = gr.Button("Full Interval")
+                        @full_interval.click(inputs=[bag_data], outputs=[start_frame, end_frame])
+                        def _on_full_interval_click(bag_data):
+                            if bag_data:
+                                length = bag_data.get_frame_count()
+                                return [0, length]
+                            return [0, 100]
+                    
         
                     gr.Markdown("#### X Axis")
-                    x_is_filtered = gr.Checkbox(label="Use Filter (X)")
+                    with gr.Row(height=55):
+                        x_is_filtered = gr.Checkbox(label="Use Filter (X)")
+                        if pi == 1:
+                            x_data_file = gr.File(label="Download X Axis", file_types=["json"])
+                            def _on_x_axis_change():
+                                return vm.export_data(PivotAxisName.X)
+                            gr.on(triggers=[e.change for e in vm.x_axis], fn=_on_x_axis_change, outputs=[x_data_file])
+
 
                     x_plot = gr.Image()
                     gr.Markdown("###### FFT")
@@ -169,11 +179,18 @@ class VisualizeView:
                             PoseTimeseries.plot_pivot_axes(x_axis, "X"),
                             PoseTimeseries.plot_pivot_axes_fft(x_axis, "X") if len(x_axis) > 0 else None
                         ]
-                    vm.x_axis[pi].change(_on_x_axis_change, inputs=[vm.x_axis[pi]], outputs=[x_plot, x_fft_plot])
-                    
+                    x_axis.change(_on_x_axis_change, inputs=[x_axis], outputs=[x_plot, x_fft_plot])
+                                        
 
                     gr.Markdown("#### Y Axis")
-                    y_is_filtered = gr.Checkbox(label="Use Filter (Y)")
+                    with gr.Row(height=55):
+                        y_is_filtered = gr.Checkbox(label="Use Filter (Y)")
+                        if pi == 1:
+                            y_data_file = gr.File(label="Download Y Axis", file_types=["json"])
+                            def _on_y_axis_change():
+                                return vm.export_data(PivotAxisName.Y)
+                            gr.on(triggers=[e.change for e in vm.y_axis], fn=_on_y_axis_change, outputs=[y_data_file])
+
 
                     y_plot = gr.Image()
                     gr.Markdown("###### FFT")
@@ -183,10 +200,17 @@ class VisualizeView:
                             PoseTimeseries.plot_pivot_axes(y_axis, "Y"),
                             PoseTimeseries.plot_pivot_axes_fft(y_axis, "Y") if len(y_axis) > 0 else None
                         ]
-                    vm.y_axis[pi].change(_on_y_axis_change, inputs=[vm.y_axis[pi]], outputs=[y_plot, y_fft_plot])
+                    y_axis.change(_on_y_axis_change, inputs=[y_axis], outputs=[y_plot, y_fft_plot])
 
                     gr.Markdown("#### Z Axis")
-                    z_is_filtered = gr.Checkbox(label="Use Filter (Z)")
+                    with gr.Row(height=55):
+                        z_is_filtered = gr.Checkbox(label="Use Filter (Z)")
+                        if pi == 1:
+                            z_data_file = gr.File(label="Download Z Axis", file_types=["json"])
+                            def _on_z_axis_change():
+                                return vm.export_data(PivotAxisName.Z)
+                            gr.on(triggers=[e.change for e in vm.z_axis], fn=_on_z_axis_change, outputs=[z_data_file])
+
 
                     z_plot = gr.Image()
                     gr.Markdown("###### FFT")
@@ -196,48 +220,77 @@ class VisualizeView:
                             PoseTimeseries.plot_pivot_axes(z_axis, "Z"),
                             PoseTimeseries.plot_pivot_axes_fft(z_axis, "Z") if len(z_axis) > 0 else None
                         ]
-                    vm.z_axis[pi].change(_on_z_axis_change, inputs=[vm.z_axis[pi]], outputs=[z_plot, z_fft_plot])                        
+                    z_axis.change(_on_z_axis_change, inputs=[z_axis], outputs=[z_plot, z_fft_plot])                        
 
                     def _on_is_filtered_change_factory(axis):
-                        def _on_is_filtered_change(is_filtered, pivot, filter_fn=lambda x: x, filter_params=[]):
-                            if not filter_fn: return pivot[axis]
-                            fn = lambda x: filter_fn(x, *filter_params)
-                            return PoseTimeseries.filter_axis(pivot[axis], fn) if is_filtered else pivot[axis]
+                        def _on_is_filtered_change(is_filtered, pivot, filter_fn=lambda x: x, filter_params=[], start_frame=0, end_frame=100):
+                            pivot_interval = pivot[axis][start_frame:end_frame]
+                            if not filter_fn: return pivot_interval
+                            fn = lambda x: np.array(filter_fn(x, *filter_params))
+                            return PoseTimeseries.filter_axis(pivot_interval, fn) if is_filtered else pivot_interval
                         return _on_is_filtered_change
                     
                     gr.on(
-                        triggers=[x_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change], 
+                        triggers=[x_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change, start_frame.change, end_frame.change], 
                         fn=_on_is_filtered_change_factory(0),
-                        inputs=[x_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params],
-                        outputs=[vm.x_axis[pi]]
+                        inputs=[x_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params, start_frame, end_frame],
+                        outputs=[x_axis]
                     )
                     
                     gr.on(
-                        triggers=[y_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change], 
+                        triggers=[y_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change, start_frame.change, end_frame.change], 
                         fn=_on_is_filtered_change_factory(1),
-                        inputs=[y_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params],
-                        outputs=[vm.y_axis[pi]]
+                        inputs=[y_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params, start_frame, end_frame],
+                        outputs=[y_axis]
                     )
                     
                     gr.on(
-                        triggers=[z_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change], 
+                        triggers=[z_is_filtered.change, vm.pivot[pi].change, vm.filter.change, vm.filter_params.change, start_frame.change, end_frame.change], 
                         fn=_on_is_filtered_change_factory(2),
-                        inputs=[z_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params],
-                        outputs=[vm.z_axis[pi]]
+                        inputs=[z_is_filtered, vm.pivot[pi], vm.filter, vm.filter_params, start_frame, end_frame],
+                        outputs=[z_axis]
                     )
                         
                     
                     gr.Markdown("## XY 2D Vector magnitude")
+                    with gr.Row(height=55):
+                        if pi == 1:
+                            v2_data_file = gr.File(label="Download XY Vector magnitude", file_types=["json"])
+                            def _on_v2_change(x_axis, y_axis):
+                                return vm.export_data(PivotAxisName.Vector2d)
+                            gr.on(
+                                triggers=[x_axis.change, y_axis.change], 
+                                fn=_on_v2_change,
+                                inputs=[x_axis, y_axis], 
+                                outputs=[v2_data_file]
+                            )
+
                     v2_plot = gr.Image()
                     gr.Markdown("###### FFT")
                     v2_fft_plot = gr.Image()
+                    
+                    
                     gr.Markdown("## XYZ 3D Vector magnitude")
+                    with gr.Row(height=55):
+                        if pi == 1:
+                            v3_data_file = gr.File(label="Download XYZ Vector magnitude", file_types=["json"])
+                            def _on_v3_change(x_axis, y_axis, z_axis):
+                                return vm.export_data(PivotAxisName.Vector3d)
+                            gr.on(
+                                triggers=[x_axis.change, y_axis.change], 
+                                fn=_on_v3_change,
+                                inputs=[x_axis, y_axis, z_axis], 
+                                outputs=[v3_data_file]
+                            )
+                        
                     v3_plot = gr.Image()
                     gr.Markdown("###### FFT")
                     v3_fft_plot = gr.Image()
                     
-                    def update_v2_plot(x_axis, y_axis):
-                        pivot = np.array([x_axis, y_axis, np.zeros_like(x_axis)])
+                    def update_v2_plot(x, y):
+                        if not (x.size == y.size):
+                            return [None, None]
+                        pivot = np.array([x, y, np.zeros_like(x)])
                         mock_pose_timeseries = np.array([pivot])
                         vector2d = Vector2dTimeseries.pose_to_vector_length(mock_pose_timeseries)[0]
                         return [
@@ -245,13 +298,15 @@ class VisualizeView:
                             Vector2dTimeseries.plot_pivot_fft(vector2d, "vector XY magnitude") if len(vector2d) > 0 else None
                         ]
                     gr.on(
-                        triggers=[vm.x_axis[pi].change, vm.y_axis[pi].change], 
+                        triggers=[*[e.change for e in vm.x_axis], *[e.change for e in vm.y_axis]], 
                         fn=update_v2_plot,
-                        inputs=[vm.x_axis[pi], vm.y_axis[pi]], 
+                        inputs=[x_axis, y_axis], 
                         outputs=[v2_plot, v2_fft_plot]
                     )
                     
                     def update_v3_plot(x_axis, y_axis, z_axis):
+                        if not (x_axis.size == y_axis.size == z_axis.size):
+                            return [None, None]
                         pivot = np.array([x_axis, y_axis, z_axis])
                         mock_pose_timeseries = np.array([pivot])
                         vector3d = Vector3dTimeseries.pose_to_vector_length(mock_pose_timeseries)[0]
@@ -260,15 +315,22 @@ class VisualizeView:
                             Vector3dTimeseries.plot_pivot_fft(vector3d, "vector XYZ magnitude") if len(vector3d) > 0 else None
                         ]
                     gr.on(
-                        triggers=[vm.x_axis[pi].change, vm.y_axis[pi].change, vm.z_axis[pi].change], 
+                        triggers=[*[e.change for e in vm.x_axis], *[e.change for e in vm.y_axis], *[e.change for e in vm.z_axis]], 
                         fn=update_v3_plot,
-                        inputs=[vm.x_axis[pi], vm.y_axis[pi], vm.z_axis[pi]], 
+                        inputs=[x_axis, y_axis, z_axis], 
                         outputs=[v3_plot, v3_fft_plot]
                     )
                 
+                vm.comp_state.filter_name = filter_type
+                vm.comp_state.pivot_selector.append(part_selector)
+                vm.comp_state.min_max.append([start_frame, end_frame])
+                vm.comp_state.use_filter.append([x_is_filtered, y_is_filtered, z_is_filtered])
         
             for part_index in range(2):
                 part_config(part_index)
                 
                 
         self.file_selector = file_selector
+        vm.session.inject_tag()
+        vm.session.update()
+        vm.comp_state.transform_components()
